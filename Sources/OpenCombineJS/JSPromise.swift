@@ -16,27 +16,37 @@ import JavaScriptKit
 import OpenCombine
 
 public extension JSPromise {
+
+  /// Error wrapper that carries a JSValue rejection reason.
+  struct PromiseError: Error, Equatable {
+    public let value: JSValue
+    public init(_ value: JSValue) { self.value = value }
+  }
+
   final class PromisePublisher: Publisher {
     public typealias Output = JSValue
-    public typealias Failure = JSValue
+    public typealias Failure = PromiseError
 
     /// `Future` instance that handles subscriptions to this publisher.
-    private var future: Future<JSValue, JSValue>
+    private let future: Future<JSValue, PromiseError>
 
     fileprivate init(promise: JSPromise) {
-      future = .init { resolver in
-        promise.then(success: {
-          resolver(.success($0))
-          return JSValue.undefined
-        }, failure: {
-          resolver(.failure($0))
-          return JSValue.undefined
-        })
+      self.future = Future<JSValue, PromiseError> { resolver in
+        promise.then(
+          success: { value in
+            resolver(.success(value))
+            return JSValue.undefined
+          },
+          failure: { errorValue in
+            resolver(.failure(PromiseError(errorValue)))
+            return JSValue.undefined
+          }
+        )
       }
     }
 
     public func receive<Downstream: Subscriber>(subscriber: Downstream)
-      where Downstream.Input == JSValue, Downstream.Failure == JSValue
+      where Downstream.Input == JSValue, Downstream.Failure == PromiseError
     {
       future.receive(subscriber: WrappingSubscriber(inner: subscriber))
     }
@@ -47,7 +57,8 @@ public extension JSPromise {
     .init(promise: self)
   }
 
-  /** Helper type that wraps a given `inner` subscriber and holds references to both stored promises
+  /**
+   Helper type that wraps a given `inner` subscriber and holds references to both stored promises
    of `PromisePublisher`, as `PromisePublisher` itself can be deallocated earlier than its
    subscribers.
    */
